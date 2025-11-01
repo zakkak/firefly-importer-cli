@@ -54,6 +54,25 @@ class FireflyImporter implements Callable<Integer> {
 
 }
 
+class Utils {
+    static HttpResponse<String> get(String baseUrl, String path, String token) throws IOException, InterruptedException {
+        HttpClient client = HttpClient.newHttpClient();
+
+        // Ensure URL doesn't end with slash
+        String url = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        url += path.startsWith("/") ? path : "/" + path;
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", "Bearer " + token)
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+}
+
 @Command(name = "test-auth", description = "Test authentication with Firefly III API")
 class TestAuth extends ReusableOptions implements Callable<Integer> {
 
@@ -77,20 +96,7 @@ class TestAuth extends ReusableOptions implements Callable<Integer> {
     }
 
     private boolean authenticate() throws IOException, InterruptedException {
-        HttpClient client = HttpClient.newHttpClient();
-
-        // Ensure URL doesn't end with slash
-        String baseUrl = fireflyUrl.endsWith("/") ? fireflyUrl.substring(0, fireflyUrl.length() - 1) : fireflyUrl;
-
-        // Test authentication by calling the /api/v1/about endpoint
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/api/v1/about"))
-                .header("Authorization", "Bearer " + apiToken)
-                .header("Accept", "application/json")
-                .GET()
-                .build();
-
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = Utils.get(fireflyUrl, "/api/v1/about", apiToken);
         int status = response.statusCode();
         String responseBody = response.body();
 
@@ -270,18 +276,8 @@ class PiraeusImporter extends ReusableOptions implements Callable<Integer> {
             return accountCache.get(productNumber);
         }
 
-        HttpClient client = HttpClient.newHttpClient();
-        String baseUrl = fireflyUrl.endsWith("/") ? fireflyUrl.substring(0, fireflyUrl.length() - 1) : fireflyUrl;
-        String url = baseUrl + "/api/v1/accounts";
+        HttpResponse<String> response = Utils.get(fireflyUrl, "/api/v1/accounts", apiToken);
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("Authorization", "Bearer " + apiToken)
-                .header("Accept", "application/json")
-                .GET()
-                .build();
-
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         int status = response.statusCode();
         String body = response.body();
 
