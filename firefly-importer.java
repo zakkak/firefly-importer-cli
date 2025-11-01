@@ -17,24 +17,46 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.concurrent.Callable;
 
-@Command(name = "firefly-importer.java",
-         mixinStandardHelpOptions = true, 
-         version = "firefly-importer 0.1.0",
-         description = "CLI tool for importing data into Firefly III")
-final class FireflyImporter implements Callable<Integer> {
-
+@Command()
+class ReusableOptions
+{
     @Option(names = {"-u", "--url"}, 
             required = true,
             description = "Firefly III instance URL")
-    private String fireflyUrl;
+    String fireflyUrl;
 
     @Option(names = {"-t", "--token"}, 
             required = true,
             description = "Firefly III API token (Personal Access Token)")
-    private String apiToken;
+    String apiToken;
+}
 
-    @Command(name = "test-auth", description = "Test authentication with Firefly III API")
-    public Integer testAuth() {
+@Command(name = "firefly-importer.java",
+         mixinStandardHelpOptions = true, 
+         version = "firefly-importer 0.1.0",
+         description = "CLI tool for importing data into Firefly III",
+         subcommands = {TestAuth.class})
+class FireflyImporter implements Callable<Integer> {
+
+    @Override
+    public Integer call() {
+        // Default action - show help
+        new CommandLine(this).usage(System.out);
+        return 0;
+    }
+
+    public static void main(String... args) {
+        int exitCode = new CommandLine(new FireflyImporter()).execute(args);
+        System.exit(exitCode);
+    }
+
+}
+
+@Command(name = "test-auth", description = "Test authentication with Firefly III API")
+class TestAuth extends ReusableOptions implements Callable<Integer> {
+
+    @Override
+    public Integer call() {
         System.out.println("Testing authentication with Firefly III instance at: " + fireflyUrl);
         
         try {
@@ -106,17 +128,5 @@ final class FireflyImporter implements Callable<Integer> {
         public String api_version;
         public String php_version;
         public String os;
-    }
-
-    @Override
-    public Integer call() {
-        // Default action - show help
-        new CommandLine(this).usage(System.out);
-        return 0;
-    }
-
-    public static void main(String... args) {
-        int exitCode = new CommandLine(new FireflyImporter()).execute(args);
-        System.exit(exitCode);
     }
 }
