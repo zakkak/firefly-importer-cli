@@ -16,7 +16,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.concurrent.Callable;
 
 @Command()
@@ -149,6 +151,9 @@ class PiraeusImporter extends ReusableOptions implements Callable<Integer> {
     @Parameters(paramLabel = "<data-file>", description = "Path to the data file to import")
     String dataFile;
 
+    @Option(names = {"--dry-run"}, description = "Parse the file but do not import into Firefly III")
+    boolean dryRun = false;
+
     /**
      * Import data into Firefly III from a tab separated values file generated
      * through Piraeus e-banking (unified transactions view).
@@ -204,7 +209,8 @@ class PiraeusImporter extends ReusableOptions implements Callable<Integer> {
             
             // Process data lines (skip header and info lines)
             int dataCount = 0;
-            String[] lastFields = null;
+            String lastProductNumber = null;
+            List<Transaction> transactions = new ArrayList<>(lines.size() - headerIndex - 1);
             for (int i = headerIndex + 1; i < lines.size(); i++) {
                 String line = lines.get(i).trim();
                 if (line.isEmpty()) continue;
@@ -218,44 +224,109 @@ class PiraeusImporter extends ReusableOptions implements Callable<Integer> {
                 String category = fields[0];
                 String description = fields[1];
                 String postingDate = fields[2];
+                try {
+                    java.time.LocalDate d = java.time.LocalDate.parse(
+                        postingDate, java.time.format.DateTimeFormatter.ofPattern("d/M/uuuu"));
+                    postingDate = d.toString(); // ISO 8601 (yyyy-MM-dd)
+                } catch (Exception e) {
+                    // Fallback: keep original if parsing fails
+                }
                 // Drop the friendly name inside the parentheses and remove all spaces from the product number
                 String productNumber = fields[3].replaceAll("\\s*\\(.*?\\)", "").replaceAll("\\s+", "");
-                String amount = fields[4];
+                String amount = fields[4].split(" ")[0].replace(".", "").replace(",", "."); // Remove currency if present, remove dots and replace comma with dot
 
                 // Use productNumber to find the corresponding account in Firefly III
                 try {
                     String accountId = findAccountIdForProduct(productNumber);
-                    if (accountId != null) {
-                        System.out.println("Found account for product " + productNumber + ": " + accountId);
-                    } else {
+                    if (accountId == null) {
                         System.out.println("No account found for product " + productNumber);
+                        // TODO handle case where no account is found
+                        continue;
                     }
 
-                    if ("Ανακατανομή".equals(category)) {
-                        if (lastFields == null) {
-                            lastFields = fields;
+                    dataCount++;
+
+                    if (description.contains("(ΠΛΗΡΩΜΗ - ΕΥΧΑΡΙΣΤΟΥΜΕ)")) {
+                        // handle as transfer
+                        String sourceID;
+                        if (lastProductNumber == null) {
+                            Transaction last = transactions.removeLast();
+                            sourceID = last.sourceID;
+                        } else {
+                            sourceID = findAccountIdForProduct(lastProductNumber);
+                        }
+                        transactions.add(new Transaction(
+                            "transfer",
+                            postingDate,
+                            amount,
+                            description,
+                            sourceID,
+                            accountId,
+                            "Ανακατανομή"
+                        ));
+                        lastProductNumber = null;
+                        continue;
+                    } else if ("Ανακατανομή".equals(category)) {
+                        if (lastProductNumber == null) {
+                            lastProductNumber = productNumber;
                             continue;
                         }
-                        // TODO Merge the two transactions in a transfer
-                        lastFields = null;
+                        // Merge the two transactions in a transfer
+                        transactions.add(new Transaction(
+                            "transfer",
+                            postingDate,
+                            amount.substring(1), // remove negative sign
+                            description,
+                            accountId,
+                            findAccountIdForProduct(lastProductNumber),
+                            "Ανακατανομή"
+                        ));
+                        lastProductNumber = null;
+                        continue;
                     }
-                    if (lastFields != null) {
+                    if (lastProductNumber != null) {
                         if ("Επαγγελματικά".equals(category)) {
-                            // TODO Merge the two transactions in a transfer
+                            // Merge the two transactions in a transfer
+                            transactions.add(new Transaction(
+                                "transfer",
+                                postingDate,
+                                amount.substring(1), // remove negative sign
+                                description,
+                                accountId,
+                                findAccountIdForProduct(lastProductNumber),
+                                "Ανακατανομή"
+                            ));
+                            lastProductNumber = null;
                             continue;
                         }
-                        // TODO warn user about unmatched redistribution
-                        System.out.println("Warning: Unmatched redistribution entry: " + lastFields[0] + " " + lastFields[1] + " " + lastFields[3] + " " + lastFields[4]);
+                        System.out.println("Warning: Unmatched redistribution entry:");
+                        System.out.println("Last  " + lastProductNumber);
+                        System.out.println("Current  " + fields[0] + " " + fields[1] + " " + fields[3] + " " + fields[4]);
+                        lastProductNumber = null;
+                        // fall through to normal transaction handling for current transaction
                     }
-                    // TODO handle normal transaction entry
+                    // Handle normal transaction entry
+                    double amountNumber = Double.parseDouble(amount);
+                    transactions.add(new Transaction(
+                        amountNumber < 0 ? "withdrawal" : "deposit",
+                        postingDate,
+                        amountNumber < 0 ? amount.substring(1) : amount,
+                        description,
+                        amountNumber < 0 ? accountId : null,
+                        amountNumber < 0 ? null : accountId,
+                        category
+                    ));
                 } catch (Exception e) {
                     System.err.println("Error looking up account for product " + productNumber + ": " + e.getMessage());
+                    e.printStackTrace();
                 }
-                
-                dataCount++;
             }
             
             System.out.println("\n✓ Successfully parsed " + dataCount + " data rows");
+            System.out.println("✓ Prepared " + transactions.size() + " transactions for import");
+            transactions.forEach(t -> {
+                System.out.println(t.type + "\t| " + t.date + "\t| " + t.amount + "\t| " + t.description + "\t| " + t.sourceID + " -> " + t.destinationID);
+            });
             System.out.println("Note: Import to Firefly III not yet implemented");
             return 0;
             
@@ -265,6 +336,33 @@ class PiraeusImporter extends ReusableOptions implements Callable<Integer> {
         }
     }
 
+    private class Transaction {
+        String type;
+        String date;
+        String amount;
+        String description;
+        String sourceID;
+        String destinationID;
+        String category;
+
+        Transaction(String type, String date, String amount, String description, String sourceID, String destinationID, String category) {
+            if (sourceID == destinationID) {
+                System.out.println("Source ID: " + sourceID + " Destination ID: " + destinationID);
+                System.out.println("Description: " + description);
+                System.out.println("Category: " + category);
+                System.out.println("Amount: " + amount);
+                System.out.println("Transaction Type: " + type);
+                throw new IllegalArgumentException("sourceID and destinationID cannot be the same");
+            }
+            this.type = type;
+            this.date = date;
+            this.amount = amount;
+            this.description = description;
+            this.sourceID = sourceID;
+            this.category = category;
+            this.destinationID = destinationID;
+        }
+    }
 
     private String findAccountIdForProduct(String productNumber) throws IOException, InterruptedException {
         if (productNumber == null || productNumber.isBlank()) {
@@ -331,15 +429,12 @@ class PiraeusImporter extends ReusableOptions implements Callable<Integer> {
 
     public static class AccountItem {
         public String id;
-        public String type;
         public AccountAttributes attributes;
     }
 
     public static class AccountAttributes {
         public String name;
-        public String number;
         public String account_number;
-        public String product_number;
         public String iban;
         public String notes;
     }
