@@ -17,6 +17,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Map;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -69,6 +70,24 @@ class Utils {
                 .header("Authorization", "Bearer " + token)
                 .header("Accept", "application/json")
                 .GET()
+                .build();
+
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    static HttpResponse<String> post(String baseUrl, String path, String token, String jsonBody) throws IOException, InterruptedException {
+        HttpClient client = HttpClient.newHttpClient();
+
+        // Ensure URL doesn't end with slash
+        String url = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        url += path.startsWith("/") ? path : "/" + path;
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", "Bearer " + token)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                 .build();
 
         return client.send(request, HttpResponse.BodyHandlers.ofString());
@@ -145,6 +164,9 @@ class TestAuth extends ReusableOptions implements Callable<Integer> {
 class PiraeusImporter extends ReusableOptions implements Callable<Integer> {
 
     private static final int PIRAEUS_HEADER_COLUMNS = 5;
+
+    private static final String DEFAULT_ACCOUNT = "(no name)";
+
     // Cache productNumber -> accountId (null means not found)
     private final Map<String, String> accountCache = new HashMap<>();
 
@@ -324,10 +346,44 @@ class PiraeusImporter extends ReusableOptions implements Callable<Integer> {
             
             System.out.println("\n✓ Successfully parsed " + dataCount + " data rows");
             System.out.println("✓ Prepared " + transactions.size() + " transactions for import");
-            transactions.forEach(t -> {
-                System.out.println(t.type + "\t| " + t.date + "\t| " + t.amount + "\t| " + t.description + "\t| " + t.sourceID + " -> " + t.destinationID);
-            });
-            System.out.println("Note: Import to Firefly III not yet implemented");
+            // Commit transactions to Firefly III, one at a time
+            for (Transaction t : transactions) {
+                Jsonb jsonb = JsonbBuilder.create();
+                Map<String, Object> txMap = new HashMap<>();
+                txMap.put("type", t.type);
+                txMap.put("date", t.date);
+                txMap.put("amount", t.amount);
+                txMap.put("description", t.description);
+                txMap.put("category", t.category);
+                if (t.sourceID == null) {
+                    txMap.put("source_name", DEFAULT_ACCOUNT);
+                } else {
+                    txMap.put("source_id", t.sourceID);
+                }
+                if (t.destinationID == null) {
+                    txMap.put("destination_name", DEFAULT_ACCOUNT);
+                } else {
+                    txMap.put("destination_id", t.destinationID);
+                }
+                String json = jsonb.toJson(Collections.singletonMap("transactions", Collections.singletonList(txMap)));
+                if (dryRun) {
+                    System.out.println(json);
+                    continue;
+                }
+                try {
+                    HttpResponse<String> response = Utils.post(fireflyUrl, "/api/v1/transactions", apiToken, json);
+                    if (response.statusCode() == 200) {
+                        System.out.println("✓ Successfully imported transaction into Firefly III");
+                    } else {
+                        System.err.println("✗ Failed to import transaction into Firefly III. HTTP Status: " + response.statusCode());
+                        System.err.println("Response: " + response.body());
+                    }
+
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                    return 1;
+                }
+            }
             return 0;
             
         } catch (IOException e) {
