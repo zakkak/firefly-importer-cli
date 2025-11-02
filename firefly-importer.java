@@ -354,7 +354,7 @@ class PiraeusImporter extends ReusableOptions implements Callable<Integer> {
                 txMap.put("date", t.date);
                 txMap.put("amount", t.amount);
                 txMap.put("description", t.description);
-                txMap.put("category", t.category);
+                txMap.put("category_name", t.category);
                 if (t.sourceID == null) {
                     txMap.put("source_name", DEFAULT_ACCOUNT);
                 } else {
