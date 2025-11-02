@@ -14,12 +14,12 @@ A JBang-based CLI tool for importing data into Firefly III instances.
 curl -Ls https://sh.jbang.dev | bash -s - app setup
 
 # Make the script executable
-chmod +x firefly-importer
+chmod +x firefly-importer.java
 ```
 
 ## Authentication
 
-The CLI supports authentication with Firefly III using Personal Access Tokens.
+The CLI requires authentication with Firefly III using Personal Access Tokens. You must provide the URL and token via command-line options for each command.
 
 ### Getting Your API Token
 
@@ -29,36 +29,6 @@ The CLI supports authentication with Firefly III using Personal Access Tokens.
 4. Give it a name and click "Create"
 5. Copy the generated token
 
-### Using the CLI
-
-#### Test Authentication
-
-```bash
-# Test with command-line arguments
-./firefly-importer test-auth --url https://your-firefly-instance.com --token your-api-token
-
-# Save configuration for future use
-./firefly-importer test-auth --url https://your-firefly-instance.com --token your-api-token --save-config
-
-# Use saved configuration
-./firefly-importer test-auth
-```
-
-#### Configuration File
-
-The CLI can save your credentials to `~/.firefly-importer/config` for convenience:
-
-```properties
-firefly.url=https://your-firefly-instance.com
-firefly.token=your-api-token
-```
-
-You can also specify a custom config location:
-
-```bash
-./firefly-importer test-auth --config /path/to/custom/config
-```
-
 ## Commands
 
 ### `test-auth`
@@ -67,15 +37,57 @@ Test authentication with your Firefly III instance.
 
 **Options:**
 
-- `-u, --url <URL>` - Firefly III instance URL
-- `-t, --token <TOKEN>` - Firefly III API token (Personal Access Token)
-- `-c, --config <PATH>` - Path to configuration file (default: `~/.firefly-importer/config`)
-- `--save-config` - Save the provided URL and token to configuration file
+- `-u, --url <URL>` - Firefly III instance URL (required)
+- `-t, --token <TOKEN>` - Firefly III API token (Personal Access Token) (required)
 
 **Example:**
 
 ```bash
-./firefly-importer test-auth --url https://firefly.example.com --token eyJ0eXAiOiJKV1QiLCJhbGc... --save-config
+./firefly-importer.java test-auth --url https://firefly.example.com --token eyJ0eXAiOiJKV1QiLCJhbGc...
+```
+
+### `import-piraeus-data`
+
+Import transaction data from Piraeus Bank (Greece) unified transactions export into Firefly III.
+
+**Options:**
+
+- `-u, --url <URL>` - Firefly III instance URL (required)
+- `-t, --token <TOKEN>` - Firefly III API token (Personal Access Token) (required)
+- `--dry-run` - Parse the file but do not import into Firefly III
+- `<data-file>` - Path to the Piraeus unified transactions TSV file (required)
+
+**Expected File Format:**
+
+The import expects a tab-separated values (TSV) file exported from Piraeus e-banking with the following Greek header columns:
+- Κατηγορία (Category)
+- Περιγραφή Συναλλαγής (Transaction Description)
+- Ημερομηνία Καταχώρησης (Posting Date)
+- Αριθμός Προϊόντος (Product Number)
+- Ποσό (Amount)
+
+**Account Matching:**
+
+The importer matches Piraeus product numbers to Firefly III accounts by checking:
+1. Account number field
+2. IBAN field
+3. Notes field (if product number appears in notes)
+
+**Transaction Handling:**
+
+- Positive amounts are imported as deposits
+- Negative amounts are imported as withdrawals
+- "Ανακατανομή" (Redistribution) category entries are merged into transfers between accounts
+- Credit card payments marked with "(ΠΛΗΡΩΜΗ - ΕΥΧΑΡΙΣΤΟΥΜΕ)" are handled as transfers
+
+**Example:**
+
+```bash
+# Dry run to preview transactions
+./firefly-importer.java import-piraeus-data --url https://firefly.example.com --token YOUR_TOKEN --dry-run piraeus-unified-example.txt
+
+# Actually import the transactions
+./firefly-importer.java import-piraeus-data --url https://firefly.example.com --token YOUR_TOKEN piraeus-unified-example.txt
 ```
 
 ## API Documentation
@@ -88,8 +100,8 @@ The script uses:
 
 - **JBang** - Script-based Java execution
 - **Picocli** - Command-line argument parsing
-- **OkHttp** - HTTP client for API calls
-- **Gson** - JSON parsing
+- **Java HttpClient** - HTTP client for API calls
+- **Jakarta JSON-B (Yasson)** - JSON parsing and binding
 
 ## License
 
